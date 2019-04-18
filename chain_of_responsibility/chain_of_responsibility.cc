@@ -5,79 +5,45 @@
 #include <string>
 #include <vector>
 
+#include "types.h"
+
 struct Creature;
 
-struct StatQuery {
-  enum Statistic { attack, defense } statistic;
-  int result;
-};
+EventConnection EventDispatcher::connect(QueryCallback cb) {
+  EventConnection connection{this, current_connection_id_++};
+  queries_[connection] = cb;
+  return connection;
+}
 
-using QueryCallback = std::function<void(StatQuery &)>;
-
-class EventDispatcher;
-
-class EventConnection {
-  EventDispatcher &dispatcher_;
-  size_t connection_id_;
-
- public:
-  EventConnection(EventDispatcher &dispatcher, size_t connection_id)
-      : dispatcher_(dispatcher), connection_id_(connection_id) {}
-
-  EventConnection(EventConnection &other) {
-    dispatcher_ = other.dispatcher_;
-    connection_id_ = other.connection_id_;
+void EventDispatcher::notify(StatQuery &q) {
+  for (const auto &query : queries_) {
+    query.second(q);
   }
+}
 
-  void disconnect() { dispatcher_.disconnect(*this); }
-
-  bool operator<(const EventConnection &rhs) {
-    return connection_id_ < rhs.connection_id_;
+void EventDispatcher::disconnect(EventConnection &connection) {
+  const auto it = queries_.find(connection);
+  if (it != queries_.end()) {
+    queries_.erase(it);
   }
+}
 
-  EventConnection &operator=(EventConnection &other) {
-    dispatcher_ = other.dispatcher_;
-    connection_id_ = other.connection_id_;
-    return *this;
-  }
-};
+void EventConnection::disconnect() { dispatcher_->disconnect(*this); }
 
-class EventDispatcher {
-  using EventConnectionMap = std::map<EventConnection, QueryCallback>;
-  EventConnectionMap queries_;
-  size_t current_connection_id_;
-
- public:
-  EventConnection connect(QueryCallback cb) {
-    EventConnection connection{*this, current_connection_id_++};
-    queries_[connection] = cb;
-    return connection;
-  }
-
-  void notify(StatQuery &q) {
-    for (const auto &query : queries_) {
-      query.second(q);
-    }
-  }
-
-  void disconnect(EventConnection &connection) {
-    const auto it = queries_.find(connection);
-    if (it != queries_.end()) {
-      queries_.erase(it);
-    }
-  }
-};
+bool EventConnection::operator<(const EventConnection &rhs) const {
+  return connection_id_ < rhs.connection_id_;
+}
 
 struct Game : public EventDispatcher {
   std::vector<Creature *> creatures;
 };
 
 struct Creature {
- protected:
+protected:
   Game &game;
   int base_attack, base_defense;
 
- public:
+public:
   Creature(Game &game, int base_attack, int base_defense)
       : game(game), base_attack(base_attack), base_defense(base_defense) {}
   virtual int get_attack() = 0;
@@ -85,7 +51,7 @@ struct Creature {
 };
 
 class Goblin : public Creature {
- public:
+public:
   Goblin(Game &game, int base_attack, int base_defense)
       : Creature(game, base_attack, base_defense) {}
 
@@ -107,19 +73,19 @@ class Goblin : public Creature {
 };
 
 class GoblinKing : public Goblin {
- public:
+public:
   GoblinKing(Game &game) : Goblin(game, 3, 3) {}
 
   // todo
 };
 
 class CreatureModifier {
- protected:
+protected:
   Game &game_;
   Creature &creature_;
   EventConnection connection_;
 
- public:
+public:
   virtual ~CreatureModifier() = default;
 
   CreatureModifier(Game &game, Creature &creature)
@@ -127,12 +93,16 @@ class CreatureModifier {
 };
 
 class IncreaseAttackModifier : public CreatureModifier {
- public:
+public:
   IncreaseAttackModifier(Game &game, Creature &creature)
       : CreatureModifier(game, creature) {
     connection_ = game.connect([&](StatQuery &q) {
       if (StatQuery::Statistic::attack == q.statistic) {
-        q.result += 1;
+        for (const auto &creature : game.creatures) {
+          if (dynamic_cast<GoblinKing *>(creature)) {
+            q.result += 1;
+          }
+        }
       }
     });
   }
@@ -141,12 +111,17 @@ class IncreaseAttackModifier : public CreatureModifier {
 };
 
 class IncreaseDefenseModifier : public CreatureModifier {
- public:
+public:
   IncreaseDefenseModifier(Game &game, Creature &creature)
       : CreatureModifier(game, creature) {
     connection_ = game.connect([&](StatQuery &q) {
       if (StatQuery::Statistic::defense == q.statistic) {
-        q.result += 1;
+        for (const auto &creature : game.creatures) {
+          if (dynamic_cast<Goblin *>(creature) ||
+              dynamic_cast<GoblinKing *>(creature)) {
+            q.result += 1;
+          }
+        }
       }
     });
   }
